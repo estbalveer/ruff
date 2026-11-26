@@ -197,7 +197,17 @@ impl ReachabilityConstraintsBuilder {
         self.interiors.len() >= MAX_INTERIOR_NODES
     }
 
-    pub(crate) fn build(self) -> ReachabilityConstraints {
+    pub(crate) fn build(mut self) -> ReachabilityConstraints {
+        // Children are interned before their parent. Visiting parents in reverse ID order
+        // propagates the retained roots to every descendant before compaction.
+        for index in (0..self.interiors.len()).rev() {
+            if self.interior_used[index] {
+                let node = self.interiors[ScopedReachabilityConstraintId::new(index)];
+                self.mark_used(node.if_true);
+                self.mark_used(node.if_ambiguous);
+                self.mark_used(node.if_false);
+            }
+        }
         if self.interior_used.first_zero().is_none() {
             ReachabilityConstraints {
                 used_interiors: self.interiors.into_nodes_boxed_slice(),
@@ -222,12 +232,8 @@ impl ReachabilityConstraintsBuilder {
     /// only calculated for intermediate values, and which don't need to be included in the final
     /// built result.
     pub(crate) fn mark_used(&mut self, node: ScopedReachabilityConstraintId) {
-        if !node.is_terminal() && !self.interior_used[node.index()] {
+        if !node.is_terminal() {
             self.interior_used.set(node.index(), true);
-            let node = self.interiors[node];
-            self.mark_used(node.if_true);
-            self.mark_used(node.if_ambiguous);
-            self.mark_used(node.if_false);
         }
     }
 
@@ -581,5 +587,37 @@ impl ReachabilityConstraintsBuilder {
         });
         self.and_cache.insert(a, b, result);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compaction_retains_descendants_in_all_three_branches() {
+        let mut builder = ReachabilityConstraintsBuilder::default();
+        let [unused, a, b, c, d] =
+            [0, 1, 2, 3, 4].map(|i| builder.add_atom(ScopedPredicateId::new(i)));
+        let branch = builder.add_interior(InteriorNode {
+            atom: ScopedPredicateId::new(5),
+            if_true: a,
+            if_ambiguous: b,
+            if_false: c,
+        });
+        let root = builder.add_interior(InteriorNode {
+            atom: ScopedPredicateId::new(6),
+            if_true: d,
+            if_ambiguous: branch,
+            if_false: a,
+        });
+        let retained = [a, b, c, d, branch, root];
+        let expected = retained.map(|id| builder.interiors[id]);
+        builder.mark_used(root);
+
+        let graph = builder.build();
+        assert_eq!(graph.used_interiors.len(), retained.len());
+        assert_eq!(retained.map(|id| graph.get_interior_node(id)), expected);
+        assert!(!graph.used_indices.unwrap().get_bit(unused.index()).unwrap());
     }
 }

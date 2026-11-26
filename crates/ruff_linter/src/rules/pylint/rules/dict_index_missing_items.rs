@@ -18,6 +18,10 @@ use crate::codes::Category;
 /// Checks for dictionary iterations that extract the dictionary value
 /// via explicit indexing, instead of using `.items()`.
 ///
+/// Loops that assign to a key of the dictionary are not flagged, because
+/// `.items()` would not remove the need to index the dictionary by key, and
+/// the value obtained from `.items()` can be stale after a write.
+///
 /// ## Why is this bad?
 /// Iterating over a dictionary with `.items()` is semantically clearer
 /// and more efficient than extracting the value with the key.
@@ -85,7 +89,52 @@ pub(crate) fn dict_index_missing_items(checker: &Checker, stmt_for: &StmtFor) {
         return;
     }
 
+    // If the loop writes to `dict[key]`, don't flag the loop: the value yielded
+    // by `.items()` can be stale after the write, and the key is still needed
+    // to perform the assignment.
+    if has_dict_write(stmt_for, dict_name) {
+        return;
+    }
+
     SubscriptVisitor::new(stmt_for, dict_name, checker).visit_body(body);
+}
+
+/// Returns `true` if the loop body writes to `dict[key]`.
+fn has_dict_write(stmt_for: &StmtFor, dict_name: &ast::ExprName) -> bool {
+    let mut visitor = SubscriptWriteVisitor {
+        target: &stmt_for.target,
+        dict_name,
+        found: false,
+    };
+    visitor.visit_body(&stmt_for.body);
+    visitor.found
+}
+
+/// A visitor to detect writes to the iterated dictionary at the loop target key.
+struct SubscriptWriteVisitor<'a> {
+    /// The target of the for loop (e.g., `key` in `for key in obj:`).
+    target: &'a Expr,
+    /// The name of the iterated object (e.g., `obj` in `for key in obj:`).
+    dict_name: &'a ast::ExprName,
+    /// Whether a write to `dict[key]` has been found.
+    found: bool,
+}
+
+impl<'a> Visitor<'a> for SubscriptWriteVisitor<'a> {
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if self.found {
+            return;
+        }
+
+        if let Expr::Subscript(ast::ExprSubscript { ctx, .. }) = expr {
+            if *ctx == ExprContext::Store && is_dict_subscript(expr, self.dict_name, self.target) {
+                self.found = true;
+                return;
+            }
+        }
+
+        visitor::walk_expr(self, expr);
+    }
 }
 
 /// A visitor to detect subscript operations on a target dictionary.
@@ -128,23 +177,11 @@ impl<'a> Visitor<'a> for SubscriptVisitor<'a, '_> {
     fn visit_expr(&mut self, expr: &'a Expr) {
         // Given `obj[key]`, `value` must be `obj` and `slice` must be `key`.
         if let Expr::Subscript(ast::ExprSubscript {
-            value,
-            slice,
             ctx: ExprContext::Load,
             ..
         }) = expr
         {
-            let Expr::Name(name) = value.as_ref() else {
-                return;
-            };
-
-            // Check that the sliced dictionary name is the same as the iterated object name.
-            if name.id != self.dict_name.id {
-                return;
-            }
-
-            // Check that the sliced value is the same as the target of the `for` loop.
-            if ComparableExpr::from(slice) != ComparableExpr::from(self.target) {
+            if !is_dict_subscript(expr, self.dict_name, self.target) {
                 return;
             }
 
@@ -163,6 +200,22 @@ impl<'a> Visitor<'a> for SubscriptVisitor<'a, '_> {
             visitor::walk_expr(self, expr);
         }
     }
+}
+
+/// Returns `true` if `expr` is a subscript of the iterated dictionary using the
+/// loop target as the key.
+fn is_dict_subscript(expr: &Expr, dict_name: &ast::ExprName, target: &Expr) -> bool {
+    let Expr::Subscript(ast::ExprSubscript { value, slice, .. }) = expr else {
+        return false;
+    };
+
+    let Expr::Name(name) = value.as_ref() else {
+        return false;
+    };
+
+    // Check that the sliced dictionary name is the same as the iterated object name.
+    // Check that the sliced value is the same as the target of the `for` loop.
+    name.id == dict_name.id && ComparableExpr::from(slice) == ComparableExpr::from(target)
 }
 
 /// Extracts the name of the dictionary from the expression.

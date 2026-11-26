@@ -106,3 +106,39 @@ PLC0206 Extracting value from dictionary without calling `.items()`
 70 |         f.write(data)
    |
 help: Use `for instrument, value in ORCHESTRA.items()` instead
+
+PLC0206 Extracting value from dictionary without calling `.items()`
+   --> dict_index_missing_items.py:103:5
+    |
+102 | # Assigning to a different key or dictionary should still be flagged.
+103 | for instrument in ORCHESTRA:
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+104 |     print(ORCHESTRA[instrument])
+    |           ---------------------
+105 |     ORCHESTRA["violin"] = "strings"
+    |
+help: Use `for instrument, value in ORCHESTRA.items()` instead
+
+PLC0206 Extracting value from dictionary without calling `.items()`
+   --> dict_index_missing_items.py:107:5
+    |
+105 |     ORCHESTRA["violin"] = "strings"
+106 |
+107 | for instrument in ORCHESTRA:
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+108 |     print(ORCHESTRA[instrument])
+    |           ---------------------
+109 |     other = {"violin": "strings"}
+110 |     other[instrument] = "woodwind"
+    |
+help: Use `for instrument, value in ORCHESTRA.items()` instead
+
+PLC0206 Extracting value from dictionary without calling `.items()`
+   --> dict_index_missing_items.py:114:5
+    |
+113 | # Mutating the value without assigning to the subscript should still be flagged.
+114 | for instrument in ORCHESTRA:
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+115 |     ORCHESTRA[instrument].pop("__name__", None)
+    |     ---------------------
+help: Use `for instrument, value in ORCHESTRA.items()` instead
